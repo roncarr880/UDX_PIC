@@ -71,7 +71,8 @@ char rcal[4];        /* ram copy of the calibrate eeprom values, these values wi
 char sw_state[3];
 char tx_inhibit;     /* transmit disabled on band change, tap tx to enable */
 char transmitting;
-
+char vox;
+char cap1L, cap1H, cap2L, cap2H;
 
 /* char pval;           /* !!! debug variable */
 
@@ -90,31 +91,32 @@ init(){
   for( i = 0; i < 3; ++i ) sw_state[i] = 0;
   tx_inhibit = 1;
   transmitting = 0;
+  vox = 0;
 
   /* set up the uart for pickit2 uart tool debug, conflicts with B6 and B7 led control
-     so disable this code when start driving the LED's
-   SPBRG = 51;           /* 9600 baud when clock is 32mhz
-   TXSTA = 0x20;         /* enable tx, slow baud rates
+     so disable this code when start driving the LED's */
+   SPBRG = 51;           /* 9600 baud when clock is 32mhz */
+   TXSTA = 0x20;         /* enable tx, slow baud rates */
    #asm
      bsf TRISC, RC7      ; rx pin input
      bcf TRISC, RC6      ; tx pin output
      bsf RCSTA,SPEN      ; enable Uart
    #endasm
-   **********/
 
      /* can't have two asm blocks in a row, compiler error, add some statements here */
 
   /* setup port I/O */
    ADCON1 = 7;                 /* enable B port inputs */
    LATB = 0;
-   TRISB = 0x07;          /* 00000111 LED's and switches */
-   /*TRISB = 0xc7;          /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
+   /*TRISB = 0x07;          /* 00000111 LED's and switches */
+   TRISB = 0xc7;          /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
 
    #asm
      bcf TRISC, RC0      ; on board LED 
      bsf LATC, RC5       ; enable rx
      bcf TRISC, RC5      ; rx/tx enable pin on portC
      bcf TRISA, RA5      ; comparator output pin
+     bsf TRISC, RC2      ; CCP1 input pin
    #endasm
 
   /* set up timer 0, don't call delay before interrupts are enabled */
@@ -133,17 +135,22 @@ init(){
    clock(CLK_RX);
 
   /* set up the comparator and reference */
- /*  CMCON = 0x23;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
- /*  CVRCON = 0xE1;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
-   CMCON = 0x03;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
-   CVRCON = 0xE0;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
+   CMCON = 0x23;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
+   CVRCON = 0xE1;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
+ /*  CMCON = 0x03;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
+ /*  CVRCON = 0xE0;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
 
   /* set up timer 3 */
    T3CON =  0x41;       /* timer 3 is source for capture module ( confusing, bits are split in register ) */
 
-  /* set up capture 1 or 2, which did I wire? */
+  /* set up capture CCP1 */
+   CCP1CON = 4;         /* capture on edge no prescale, 5 == rising edge, 4 == falling edge */
+
+
   /*  8 * 8meg is 0x03D0 9000, so fits in 32 bits.  Can divide this value by the captured timer value
       to get the tone * 8.  Tone * 8 is added to the base to transmit the tone */
+
+   
    
 }
 
@@ -156,6 +163,7 @@ static char i;
    button_state();
    switch_action();
    vox_check();
+   if( transmitting ) send_tone();
 
 
     /**** send hello on the uart. sending eeprom data 
@@ -248,11 +256,115 @@ static char tm;
 
    if( CMCON & 128 ){
       led_on();
+      vox = 11;
+      if( transmitting == 0 ) ;    /* switch to tx */
+      transmitting = 1;
    }
    else{
       led_off();
    }
 
+   if( vox ){
+      --vox;
+      if( vox == 0 ){
+         transmitting = 0;
+         /* switch to rx */
+      }
+    }
+
+}
+
+void send_tone(){
+static char state;
+
+
+   if( (PIR1 & 4) == 0 ) return;
+
+   #asm
+     bcf PIR1,2
+   #endasm
+
+   if( state == 0 ){
+      cap1L = CCPR1L;
+      cap1H = CCPR1H;
+      ++state;
+      return;
+   }
+   else{
+      cap2L = CCPR1L;
+      cap2H = CCPR1H;
+      ++state;
+   }
+   if( state > 1 ) state = 0;
+
+  /***  debug prints ***/
+
+/********
+    phex( cap1H );
+    phex( cap1L );
+    putch( ' ' );
+    phex( cap2H );
+    phex( cap2L );
+*********/
+
+    #asm
+      movf cap1L,W         ; get the delta count between captures
+      subwf cap2L,F
+      movf  cap1H,W
+      subwfb cap2H,F
+    #endasm
+
+/*****   
+    putch(' ');
+    phex( cap2H );
+    phex( cap2L );
+*****/
+
+    divq3 = 0x03;        /* 8 * 8mhz is dividend */
+    divq2 = 0xd0;
+    divq1 = 0x90;
+    divq0 = 0;
+
+    zarg();
+    zacc();
+    arg1 = cap2H;        /* divisor is delta capture counts */
+    arg0 = cap2L;
+    divide();
+
+   /*** putch(' ');  ***/
+
+    if( divq2 || divq1 > 0x5D ||  divq1 < 0x6 ){         /* out of range */
+      /**** putch('B');
+       putch('A');
+       putch('D');
+       crlf(); *****/
+       return;
+    }
+
+ /*****
+    phex( divq1 );
+    phex( divq0 );
+    crlf();
+ *****/
+    
+    si_get_base();
+
+  /* add in the tone offset */
+   zacc();
+   zarg();
+   acc0 = solution[7];  acc1 = solution[6];   /* adjusting P2 values */
+   arg1 = divq1;  arg0 = divq0;
+   dadd();
+   zarg();                                    /* check if P2 is larger than P3 */
+   arg0 = solution[1];  arg1 = solution[0];   /* load P3 */
+   while( dsub() == 0 ) ++solution[4];        /* sub until no borrow */
+   dadd();                                    /* add back on borrow */
+   solution[6] = acc1;  solution[7] = acc0;
+   wrt_solution();
+
+     #asm
+       bcf PIR1,2                  ; start fresh next time
+     #endasm
 }
 
 led_on(){
@@ -605,7 +717,6 @@ char read_buttons(){
 }
 
 /* read switches, need level detect on TX switch or latch on the transmitter */
-/* !!!!! 10 * debounce is too long */
 void button_state(){              /* state machine running at 1ms rate */
 static char sw,st;
 static char press_, nopress;
@@ -651,9 +762,13 @@ void phex( char val ){
    k += '0';
    if( k > '9' ) k += 7;
    putch( k );
+
+}
+
+crlf(){
+
    putch( '\r' );
    putch( '\n' );
-
 }
 
 putch( char c ){             /* send a character on the serial line */
