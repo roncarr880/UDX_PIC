@@ -17,9 +17,10 @@
 #define LONGPRESS 6
 #define DBOUNCE 50
 
-char sw_state[3];
 
 #pragma pic 0
+
+/* access page variables */
 char _temp;
 char _temp2;
 char _eedata;
@@ -31,11 +32,13 @@ char arg0, arg1, arg2, arg3;
 char divq0, divq1, divq2, divq3;
 char divi;
 
+extern char eecal[4] = { 0x36, 0x50, 15, 10 };        /* keep at eeprom address zero */
+
 /* pre-calculated si5351 solutions in eeprom */
 /* 1st 2 values are P3, last two are P2, 5th is P1 LSB */
 /* solution is with 3 fractional bits, so audio tone * 8 is the offset to add in */
 /* 6th value must be zero for the algorithms to work */
-extern char cal[4] = { 10, 20, 15, 10 };       /* 40 was a good value for 40 meters */
+
 extern char s40ft8[] = { 0x36, 0x7F, 0x00, 0x0D, 0xD8, 0x00, 0x0C, 0x58 };
 extern char s40ft4[] = { 0x36, 0x7F, 0x00, 0x0D, 0xC9, 0x00, 0x01, 0xC9 };
 extern char s40js8[] = { 0x36, 0x7F, 0x00, 0x0D, 0xDA, 0x00, 0x1C, 0x5A };
@@ -65,42 +68,53 @@ char band;
 char solution[8];    /* si5351 freq solution to send to si5351 */
 char rcal[4];        /* ram copy of the calibrate eeprom values, these values will be adjusted */
                      /* and later written back to eeprom, but cal values overwritten on program load */
+char sw_state[3];
+char tx_inhibit;     /* transmit disabled on band change, tap tx to enable */
+char transmitting;
+
+
+/* char pval;           /* !!! debug variable */
 
 
 init(){
 
   /* OSCCON = 0x72;              /* !!! testing 8 mhz internal clock */
 
-  EECON1 = 0;
+  EECON1 = 0;                 /* clear an undefined power up bit */
   
   /* init vars that need values */
   mode = 3;       /* wspr */
   band = 0;       /* 40 meters */
   sec4 = 0;
-  for( i = 0; i < 4; ++i ) rcal[i] = cal[i];
+  for( i = 0; i < 4; ++i ) rcal[i] = eecal[i];
   for( i = 0; i < 3; ++i ) sw_state[i] = 0;
+  tx_inhibit = 1;
+  transmitting = 0;
 
   /* set up the uart for pickit2 uart tool debug, conflicts with B6 and B7 led control
-     so disable this code when start driving the LED's */
-   SPBRG = 51;           /* 9600 baud when clock is 32mhz */
-   TXSTA = 0x20;         /* enable tx, slow baud rates */
+     so disable this code when start driving the LED's
+   SPBRG = 51;           /* 9600 baud when clock is 32mhz
+   TXSTA = 0x20;         /* enable tx, slow baud rates
    #asm
      bsf TRISC, RC7      ; rx pin input
      bcf TRISC, RC6      ; tx pin output
      bsf RCSTA,SPEN      ; enable Uart
    #endasm
+   **********/
 
      /* can't have two asm blocks in a row, compiler error, add some statements here */
 
   /* setup port I/O */
+   ADCON1 = 7;                 /* enable B port inputs */
    LATB = 0;
-   /* TRISB = 0x07;            /* 00000111 LED's and switches */
-   TRISB = 0xc7;            /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
+   TRISB = 0x07;          /* 00000111 LED's and switches */
+   /*TRISB = 0xc7;          /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
 
    #asm
      bcf TRISC, RC0      ; on board LED 
      bsf LATC, RC5       ; enable rx
      bcf TRISC, RC5      ; rx/tx enable pin on portC
+     bcf TRISA, RA5      ; comparator output pin
    #endasm
 
   /* set up timer 0, don't call delay before interrupts are enabled */
@@ -117,6 +131,19 @@ init(){
    wrt_solution();
    wrt_dividers( dividers[band] );
    clock(CLK_RX);
+
+  /* set up the comparator and reference */
+ /*  CMCON = 0x23;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
+ /*  CVRCON = 0xE1;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
+   CMCON = 0x03;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
+   CVRCON = 0xE0;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
+
+  /* set up timer 3 */
+   T3CON =  0x41;       /* timer 3 is source for capture module ( confusing, bits are split in register ) */
+
+  /* set up capture 1 or 2, which did I wire? */
+  /*  8 * 8meg is 0x03D0 9000, so fits in 32 bits.  Can divide this value by the captured timer value
+      to get the tone * 8.  Tone * 8 is added to the base to transmit the tone */
    
 }
 
@@ -128,61 +155,66 @@ static char i;
    if( sec4 == 255 ) save_calibrate();
    button_state();
    switch_action();
+   vox_check();
 
-  /********
-    delay( 250 );    /* delay 244 is closer to 1/4 second 
-    delay( 250 );
-    led_on();
-    delay( 250 );
-    delay( 250 );
-    led_off();
-   *************/
 
-    /* send hello on the uart. sending eeprom data 
+    /**** send hello on the uart. sending eeprom data 
     i = 0;
-    while( c = hello[i++] ) putch( c ); */
+    while( c = hello[i++] ) putch( c ); ****/
 
-/********
-    while(1){               /* generate some I2C traffic for testing 
-       i2start();
-       i2send( 3 );
-       i2send( 0xff );
-       i2stop();
-       led_on();
-       delay(2);
-       led_off();
-    }
- */
 
 }
 
 
+/* data setup and modes LED's are reversed, fixed here */
 void switch_action(){
 
-   /* guess at which switch is which */
    k = sw_state[0];
    if( k >= TAP ){
      switch( k ){
         case LONGPRESS:  adj_cal( 252 );  break;
+        case TAP: mode_change( 1 );  break;
+        case DTAP:  band_change(255);  break;
      }
      sw_state[0] = FINI;
-   }
-
-   k = sw_state[1];
-   if( k >= TAP ){
-     switch( k ){
-     }
-     sw_state[1] = FINI;
    }
 
    k = sw_state[2];
    if( k >= TAP ){
      switch( k ){
-        case LONGPRESS:  adj_cal( 4 );  break;
+        case TAP:  tx_inhibit = 0; break;
+        case LONGPRESS:      break;            /* tune mode, manual transmit */
      }
      sw_state[2] = FINI;
    }
 
+   k = sw_state[1];
+   if( k >= TAP ){
+     switch( k ){
+        case LONGPRESS:  adj_cal( 4 );  break;
+        case TAP: mode_change(255); break;
+        case DTAP:  band_change( 1 ); break;
+     }
+     sw_state[1] = FINI;
+   }
+
+}
+
+void mode_change( char val ){
+  
+   mode += val;
+   if( mode > 3 ) mode = 3;
+   si_get_base();
+   wrt_solution();
+}
+
+void band_change( char val ){
+
+   band += val:
+   if( band > 3 ) band = 3;
+   si_get_base();
+   wrt_solution();
+   wrt_dividers( dividers[band] );
 }
 
 
@@ -208,7 +240,22 @@ delay( char tm ){        /* 8 bit, less than 255 ms delay */
 }
 
 
-led_on(){            /* !!! inline these if only called from one place */
+void vox_check(){
+static char tm;
+
+   if( tm == msec ) return;
+   tm = msec;
+
+   if( CMCON & 128 ){
+      led_on();
+   }
+   else{
+      led_off();
+   }
+
+}
+
+led_on(){
 
    #asm
      bsf LATC,RC0
@@ -242,14 +289,9 @@ no_interrupts(){
    #endasm
 }
 
-putch( char c ){             /* send a character on the serial line */
-
-   while( (TXSTA & 2) == 0 );     /* wait previous completed TRMT */
-   TXREG = c;
-}
 
 
-/*    I2C routines */
+/***********    I2C routines   ************/
 
 i2begin(){
 
@@ -368,14 +410,28 @@ si_get_base(){               /* lacking double subscript array, eeprom offset is
 adj_cal( char val ){         /* called on long press up/down, val will be 1,255, or 2,254 */
 
    rcal[band] += val;   /* no guard for underflow, eeprom values should be low for starters */
-   LATB = rcal[band];
+   LATB = bitrev(rcal[band]);      /* flash some LED's */
    sec4 = 25;           /* will need to count up to 255 and then LED's will be normal again */
-                        /* !!! write eeprom when sec4 is 255, then set it to zero */
+
    si_get_base();       /* implement the change */
    wrt_solution();   
 }
 
+char bitrev( char b ){     /* j variable used here, pick out the bits to display in the LED's */
 
+   j = 0;
+   #asm
+      btfsc _bitrev,2
+      bsf   j,6
+      btfsc _bitrev,3
+      bsf   j,5
+      btfsc _bitrev,4
+      bsf   j,4
+      btfsc _bitrev,5
+      bsf   j,3
+   #endasm
+   return j;
+}
 
 led_control(){   /* leds in order are wspr,js8,ft4,ft8,tx on bits RB3-RB7 */
 static char last_time;
@@ -406,6 +462,9 @@ static char last_time;
     case 20: LATB = 0; break;
     case 21: sec4 = 0; break;
    }
+
+   if( tx_inhibit && sec4 < 10 ) LATB ^= 128;
+   else if( transmitting ) LATB |= 128;
 
 }
 
@@ -490,7 +549,7 @@ divide(){
 
 
 #asm
-_eewrite
+eewrite
      ; the example from data sheet not 100% correct, leaves bit 6 in eecon1 undefined, cleared eecon1 in init() to fix.
      ; banksel EEADR
       movwf   EEADR
@@ -528,12 +587,11 @@ _eewrite
 save_calibrate(){              /* read current data in eeprom, save new data if different */
 static char adr;
 
-   adr = &cal[0];
+   adr = 0;                             /* &cal[0], address of ee data not figured correctly */
    for( j = 0; j < 4; ++j ){
-      if( rcal[j] != cal[j] ){
+      if( rcal[j] != eecal[j] ){
          _eedata = rcal[j];
-         adr = adr;                   /* loads W reg with address */
-         _eewrite();
+         eewrite( adr );
       }
       ++adr;
    }
@@ -579,6 +637,29 @@ static char tm;
          sw_state[i]= st;      
          sw >>= 1;   /* next switch */
       }        
+}
+
+/***********   debug functions  ***************/
+
+void phex( char val ){
+
+   k = val >> 4;
+   k += '0';
+   if( k > '9' ) k += 7;
+   putch( k );
+   k = val & 0xf;
+   k += '0';
+   if( k > '9' ) k += 7;
+   putch( k );
+   putch( '\r' );
+   putch( '\n' );
+
+}
+
+putch( char c ){             /* send a character on the serial line */
+
+   while( (TXSTA & 2) == 0 );     /* wait previous completed TRMT */
+   TXREG = c;
 }
 
 
