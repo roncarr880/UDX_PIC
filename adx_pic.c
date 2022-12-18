@@ -1,4 +1,49 @@
 
+/****** 
+ Wiring:
+
+ A 8mhz crystal is used in 4x PLL mode. The PIC has a 4 phase clock resulting in 8 MIPS.
+ An onboard LED is wired to RC0 via a series resistor.  The LED shows the state of the comparator and is updated
+    at a 1khz rate.  It shows a rough estimate of the audio drive on transmit.
+ Bits RB0-RB2 are wired to Arduino D2-D4, used as inputs for the switches.
+ Bits RB3-RB7 are wired to Arduino D9-D13, used as outputs for the 5 LED's, WSPR,JS8,FT4,FT8,TX.
+ RA1 is wired to Arduino D7 as the input to comparator #2. ( audio in )
+ RA5, the output of the comparator, is wired to RC2, the input for capture.
+ RC5 is wired to Arduino D8 for the RX/TX switch.
+ RC3 and RC4 are wired via a level converter to Arduino A5 and A4 for I2C signals.
+ RC6 and RC7 are wired to RB6 and RB7 via 330 ohm resistors, UART tx rx for using the Pickit Uart tool.
+ A 3.2 volt supply was created by 3 diode drops from 5 volts and a 1k load resistor.
+ 
+ Operation:
+
+ Timer 0 is set up in 8 bit mode with divide by 32 prescaler giving an approximate 1khz interrupt for timing.
+ The analog voltage reference is set to provide an external reference on RA2, but used internally as the 2nd
+    input to the comparator.
+ Timer 3 is used as the capture timer with no prescaler.
+ The capture is setup to use a falling clock and analog reference at the 1st voltage level above 0 volts.  This
+    combination seemed to have the best noise margin.
+ 
+ Precalculated Si5351 register values are stored in eeprom for each of the 4 bands and 4 modes for receive.
+    The values are such that adding 8 to the P2 value moves the frequency 1hz.  ( si5351  P1 + P2/P3 formula )
+ A per band calibrate value is added to the precalculated values to provide frequency adjustment.  The calibrate
+    value can be adjusted and saved back to eeprom.
+ On transmit the audio tone * 8 is calculated and added to the precalculated register values.  The scheme 
+    provides for 3 bits of fractional frequency or frequency steps of 1/8 hz.
+ 8 * 8meg is 0x03D09000.  This value divided by the captured timer value is 8 * the audio tone.
+
+ Use:
+
+ On startup or band change, the transmitter is disabled and the TX Led blinks.  Tap the TX button to enable 
+    transmit AFTER checking the correct band module is installed.
+ Tap the arrow buttons to change mode.
+ Double tap the arrow buttons to change band.
+ Long press the arrow buttons to adjust calibration per band.
+ Long press the TX button to transmit for tuning up.
+
+ 
+******/
+
+
 #include "p18f2220.h"
 
 #define SI5351 0x60
@@ -58,11 +103,10 @@ extern char s10js8[] = { 0xCB, 0x76, 0x00, 0x0E, 0xD8, 0x00, 0x61, 0x70 };
 extern char s10wsp[] = { 0xCB, 0x76, 0x00, 0x0E, 0xDF, 0x00, 0x81, 0xB6 };
 extern char dividers[4] = { 112,60,40,30 };
 
-extern char hello[] = {'H','e','l','l','o','\r','\n',0};    /* junk */
+extern char hello[] = {'H','e','l','l','o','\r','\n',0};    /* uart test */
 
 
-char sec4;         /* 1/4 seconds counts */
-
+char sec4;           /* 1/4 seconds counts */
 char msec;           /* about 1ms counts */
 char mode;
 char band;
@@ -73,7 +117,7 @@ char sw_state[3];
 char tx_inhibit;     /* transmit disabled on band change, tap tx to enable */
 char transmitting;
 char vox;
-char cap1L, cap1H, cap2L, cap2H;
+char cap1L, cap1H, cap2L, cap2H;      /* captured timer values */
 
 
 
@@ -147,10 +191,6 @@ init(){
 
   /* set up capture CCP1 */
    CCP1CON = 4;         /* capture on edge no prescale, 5 == rising edge, 4 == falling edge */
-
-
-  /*  8 * 8meg is 0x03D0 9000, so fits in 32 bits.  Can divide this value by the captured timer value
-      to get the tone * 8.  Tone * 8 is added to the base to transmit the tone */  
    
 }
 
@@ -237,7 +277,7 @@ _interrupt(){
 static char ms;
 
   ++msec;                 /* ms elapsed timer, a little slow */
-  if( ++ms == 250 ){
+  if( ++ms == 244 ){
      ++sec4;              /* 1/4 sec timer, 4 hz */
      ms = 0;
   }
@@ -621,7 +661,7 @@ static char last_time;
 
 zacc(){       /* clear acc */
 
-  acc0 = acc1 = acc2 = acc3 = 0;
+   acc0 = acc1 = acc2 = acc3 = 0;
 }
 
 zarg(){       /* clear arg */
