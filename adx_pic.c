@@ -1,3 +1,4 @@
+
 #include "p18f2220.h"
 
 #define SI5351 0x60
@@ -57,7 +58,7 @@ extern char s10js8[] = { 0xCB, 0x76, 0x00, 0x0E, 0xD8, 0x00, 0x61, 0x70 };
 extern char s10wsp[] = { 0xCB, 0x76, 0x00, 0x0E, 0xDF, 0x00, 0x81, 0xB6 };
 extern char dividers[4] = { 112,60,40,30 };
 
-extern char hello[] = {'H','e','l','l','o','\r','\n',0};    /* junk !!! */
+extern char hello[] = {'H','e','l','l','o','\r','\n',0};    /* junk */
 
 
 char sec4;         /* 1/4 seconds counts */
@@ -74,12 +75,11 @@ char transmitting;
 char vox;
 char cap1L, cap1H, cap2L, cap2H;
 
-/* char pval;           /* !!! debug variable */
 
 
 init(){
 
-  /* OSCCON = 0x72;              /* !!! testing 8 mhz internal clock */
+  /* OSCCON = 0x72;              /* testing 8 mhz internal clock */
 
   EECON1 = 0;                 /* clear an undefined power up bit */
   
@@ -95,26 +95,28 @@ init(){
 
   /* set up the uart for pickit2 uart tool debug, conflicts with B6 and B7 led control
      so disable this code when start driving the LED's */
-   SPBRG = 51;           /* 9600 baud when clock is 32mhz */
-   TXSTA = 0x20;         /* enable tx, slow baud rates */
+/*******
+   SPBRG = 51;           /* 9600 baud when clock is 32mhz 
+   TXSTA = 0x20;         /* enable tx, slow baud rates 
    #asm
      bsf TRISC, RC7      ; rx pin input
      bcf TRISC, RC6      ; tx pin output
      bsf RCSTA,SPEN      ; enable Uart
    #endasm
+*******/
 
      /* can't have two asm blocks in a row, compiler error, add some statements here */
 
   /* setup port I/O */
    ADCON1 = 7;                 /* enable B port inputs */
    LATB = 0;
-   /*TRISB = 0x07;          /* 00000111 LED's and switches */
-   TRISB = 0xc7;          /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
+   TRISB = 0x07;          /* 00000111 LED's and switches */
+   /*TRISB = 0xc7;          /* 11000111 while using the UART for debug printing. tx and ft8 led may light */
 
    #asm
      bcf TRISC, RC0      ; on board LED 
      bsf LATC, RC5       ; enable rx
-     bcf TRISC, RC5      ; rx/tx enable pin on portC
+     bcf TRISC, RC5      ; rx/tx enable pin as an output on portC
      bcf TRISA, RA5      ; comparator output pin
      bsf TRISC, RC2      ; CCP1 input pin
    #endasm
@@ -137,7 +139,7 @@ init(){
   /* set up the comparator and reference */
    CMCON = 0x23;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
    CVRCON = 0xE1;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
- /*  CMCON = 0x03;        /* 23 == invert comparitor #2, 2 independant comparators with outputs */
+ /*  CMCON = 0x03;        /* 03 == not invert comparitor #2, 2 independant comparators with outputs */
  /*  CVRCON = 0xE0;       /* (1 == 0.2) (0 == 0.0) volt reference on pin vref- RA2 */
 
   /* set up timer 3 */
@@ -148,15 +150,15 @@ init(){
 
 
   /*  8 * 8meg is 0x03D0 9000, so fits in 32 bits.  Can divide this value by the captured timer value
-      to get the tone * 8.  Tone * 8 is added to the base to transmit the tone */
-
-   
+      to get the tone * 8.  Tone * 8 is added to the base to transmit the tone */  
    
 }
 
 main(){
+/***
 static char c;
 static char i;
+***/
 
    led_control();
    if( sec4 == 255 ) save_calibrate();
@@ -169,12 +171,10 @@ static char i;
     /**** send hello on the uart. sending eeprom data 
     i = 0;
     while( c = hello[i++] ) putch( c ); ****/
-
-
 }
 
 
-/* data setup and modes LED's are reversed, fixed here */
+/* my data setup and the modes LED's are reversed, fixed here */
 void switch_action(){
 
    k = sw_state[0];
@@ -191,7 +191,13 @@ void switch_action(){
    if( k >= TAP ){
      switch( k ){
         case TAP:  tx_inhibit = 0; break;
-        case LONGPRESS:      break;            /* tune mode, manual transmit */
+        case LONGPRESS:                    /* tune mode, manual transmit */
+          if( (PORTB & 4) == 0 ){          /* is it still pressed */
+             if( transmitting == 0 ) tx();
+             return;                       /* latch in longpress state */
+          }
+          else rx();
+        break;           
      }
      sw_state[2] = FINI;
    }
@@ -223,7 +229,8 @@ void band_change( char val ){
    si_get_base();
    wrt_solution();
    wrt_dividers( dividers[band] );
-}
+   tx_inhibit = 1;                     /* blinking tx LED reminds user to change the low pass module */
+}                                      /* tap tx to acknowledge */
 
 
 _interrupt(){
@@ -251,14 +258,15 @@ delay( char tm ){        /* 8 bit, less than 255 ms delay */
 void vox_check(){
 static char tm;
 
+   if( (PORTB & 4) == 0 ) return;    /* tx button pressed, in manual tune mode */
+
    if( tm == msec ) return;
    tm = msec;
 
    if( CMCON & 128 ){
       led_on();
       vox = 11;
-      if( transmitting == 0 ) ;    /* switch to tx */
-      transmitting = 1;
+      if( transmitting == 0 ) tx();    /* switch to tx */
    }
    else{
       led_off();
@@ -266,19 +274,16 @@ static char tm;
 
    if( vox ){
       --vox;
-      if( vox == 0 ){
-         transmitting = 0;
-         /* switch to rx */
-      }
-    }
-
+      if( vox == 0 ) rx();
+   }
 }
 
 void send_tone(){
 static char state;
 
 
-   if( (PIR1 & 4) == 0 ) return;
+   if( (PIR1 & 4) == 0 ) return;         /* capture event ? */
+   vox = 10;                             /* a capture event is another good indicator we are transmitting */
 
    #asm
      bcf PIR1,2
@@ -293,9 +298,8 @@ static char state;
    else{
       cap2L = CCPR1L;
       cap2H = CCPR1H;
-      ++state;
    }
-   if( state > 1 ) state = 0;
+   state = 0;
 
   /***  debug prints ***/
 
@@ -338,6 +342,10 @@ static char state;
        putch('A');
        putch('D');
        crlf(); *****/
+       /* clear the tx led to show audio is marginal, normally will see some of these */
+       #asm
+         bcf LATB,7
+       #endasm
        return;
     }
 
@@ -363,9 +371,37 @@ static char state;
    wrt_solution();
 
      #asm
-       bcf PIR1,2                  ; start fresh next time
+       bcf PIR1,2           ; make sure we catch the events when they happen to avoid false counts
      #endasm
 }
+
+
+  /*  what needs to change to enter tx mode */
+void tx(){
+
+  if( tx_inhibit ) return;
+  clock(CLK_OFF);
+  #asm
+    bcf LATC,RC5          ; rx switch off
+  #endasm
+  transmitting = 1;
+  clock(CLK_TX);
+}
+
+   /* what needs to change to enter rx mode */
+void rx(){
+
+   clock(CLK_OFF);
+   transmitting = 0;
+   si_get_base();
+   wrt_solution();
+   clock(CLK_RX);
+   #asm
+     bsf LATC,RC5         ; rx switch on
+   #endasm
+}
+
+
 
 led_on(){
 
