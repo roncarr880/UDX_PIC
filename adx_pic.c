@@ -634,7 +634,7 @@ static char last_time;
    switch( band ){
     case 0:   j = 16;   break;
     case 1:   j = 32;   break;
-    case 2:   j = 8+32+64;  break;
+    case 2:   j = 8+16+64;  break;
     case 3:   j = 64;   break;
    }
 
