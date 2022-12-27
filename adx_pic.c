@@ -4,7 +4,8 @@
 
  A 8mhz crystal is used in 4x PLL mode. The PIC has a 4 phase clock resulting in 8 MIPS.
  An onboard LED is wired to RC0 via a series resistor.  The LED shows the state of the comparator and is updated
-    at a 1khz rate.  It shows a rough estimate of the audio drive on transmit.
+    at a 1khz rate.  It shows a rough estimate of the audio drive on transmit. It will pulse a beat frequency
+    between the audio frequency and the 1khz sample rate.
  Bits RB0-RB2 are wired to Arduino D2-D4, used as inputs for the switches.
  Bits RB3-RB7 are wired to Arduino D9-D13, used as outputs for the 5 LED's, WSPR,JS8,FT4,FT8,TX.
  RA1 is wired to Arduino D7 as the input to comparator #2. ( audio in )
@@ -78,7 +79,7 @@ char arg0, arg1, arg2, arg3;
 char divq0, divq1, divq2, divq3;
 char divi;
 
-extern char eecal[4] = { 0x36, 0x50, 15, 10 };        /* keep at eeprom address zero */
+extern char eecal[6] = { 0x36, 0x50, 15, 10, 12, 0x36 };        /* keep at eeprom address zero */
 
 /* pre-calculated si5351 solutions in eeprom */
 /* 1st 2 values are P3, last two are P2, 5th is P1 LSB */
@@ -101,17 +102,41 @@ extern char s10ft8[] = { 0xCB, 0x76, 0x00, 0x0E, 0xD7, 0x00, 0xAF, 0xE6 };
 extern char s10ft4[] = { 0xCB, 0x76, 0x00, 0x0E, 0xE8, 0x00, 0x1D, 0x90 };
 extern char s10js8[] = { 0xCB, 0x76, 0x00, 0x0E, 0xD8, 0x00, 0x61, 0x70 };
 extern char s10wsp[] = { 0xCB, 0x76, 0x00, 0x0E, 0xDF, 0x00, 0x81, 0xB6 };
-extern char dividers[4] = { 112,60,40,30 };
+/* experimental freq/bands, 12m on 10 meter low pass, and wefax boston rx only */
+extern char s12ft8[] = { 0xBE, 0xBF, 0x00, 0x0D, 0xF1, 0x00, 0x96, 0x31 };
+extern char s12ft4[] = { 0xBE, 0xBF, 0x00, 0x0D, 0xF2, 0x00, 0x54, 0x72 };
+extern char s12js8[] = { 0xBE, 0xBF, 0x00, 0x0D, 0xF2, 0x00, 0xB2, 0x72 };
+extern char s12wsp[] = { 0xBE, 0xBF, 0x00, 0x0D, 0xF3, 0x00, 0x44, 0xB3 };
+extern char fax0[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
+extern char fax1[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
+extern char fax2[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
+extern char fax3[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
+
+
+extern char dividers[6] = { 112,60,40,30,32,114 };
 
 extern char hello[] = {'H','e','l','l','o','\r','\n',0};    /* uart test */
 
+/* unused, the first display method is easier to figure out the band from the LED's */
+extern char cut40[] = { 0xaa, 0x78 };      /* cut morse numbers for band indication */
+extern char cut20[] = { 0xd9, 0xf8 };
+extern char cut15[] = { 0x8a, 0xa8 };
+extern char cut10[] = { 0xb8, 0xb8 };
+
+
+/**** cut number bit patterns    
+10101010 01111000  40
+11011001 11111000  20
+10001010 10101000  15
+10111000 10111000  10
+****/
 
 char sec4;           /* 1/4 seconds counts */
 char msec;           /* about 1ms counts */
 char mode;
 char band;
 char solution[8];    /* si5351 freq solution to send to si5351 */
-char rcal[4];        /* ram copy of the calibrate eeprom values, these values will be adjusted */
+char rcal[6];        /* ram copy of the calibrate eeprom values, these values will be adjusted */
                      /* and later written back to eeprom, but cal values overwritten on program load */
 char sw_state[3];
 char tx_inhibit;     /* transmit disabled on band change, tap tx to enable */
@@ -131,7 +156,7 @@ init(){
   mode = 3;       /* wspr */
   band = 0;       /* 40 meters */
   sec4 = 0;
-  for( i = 0; i < 4; ++i ) rcal[i] = eecal[i];
+  for( i = 0; i < 6; ++i ) rcal[i] = eecal[i];
   for( i = 0; i < 3; ++i ) sw_state[i] = 0;
   tx_inhibit = 1;
   transmitting = 0;
@@ -230,7 +255,9 @@ void switch_action(){
    k = sw_state[2];
    if( k >= TAP ){
      switch( k ){
-        case TAP:  tx_inhibit = 0; break;
+        case TAP:
+          if( band <  5 ) tx_inhibit = 0;  /* no tx on wefax freq */
+        break;
         case LONGPRESS:                    /* tune mode, manual transmit */
           if( (PORTB & 4) == 0 ){          /* is it still pressed */
              if( transmitting == 0 ) tx();
@@ -265,7 +292,7 @@ void mode_change( char val ){
 void band_change( char val ){
 
    band += val:
-   if( band > 3 ) band = 3;
+   if( band > 5 ) band = 5;
    si_get_base();
    wrt_solution();
    wrt_dividers( dividers[band] );
@@ -636,6 +663,8 @@ static char last_time;
     case 1:   j = 32;   break;
     case 2:   j = 8+16+64;  break;
     case 3:   j = 64;   break;
+    case 4:   j = 8+32; break;
+    case 5:   j = 8+16; break;
    }
 
    switch( sec4 ){
@@ -656,6 +685,29 @@ static char last_time;
 
 }
 
+
+void led_control2(){         /* band in morse in LED's */
+static char last_time;
+
+   if( sec4 == last_time ) return;
+   last_time = sec4;
+   if( sec4 > 20 ) return;
+   if( sec4 == 16 ) last_time = sec4 = 0;
+
+   k = 64;    /* build display */
+   j = mode;
+   while( j-- ) k >>= 1;    /* k has mode led */
+   j = band << 1;
+   i = sec4;
+   if( sec4 > 7 ) ++j, i = i - 8;
+   j = cut40[j];            /* get morse byte */
+   while( i-- ) j <<= 1;    /* get morse bit */
+   if( (j & 128) == 0)  k = 0;
+
+   if( transmitting ) k |= 128;
+   else if( tx_inhibit && ( sec4 & 3 ) == 0 ) k |= 128;
+   PORTB = k;
+}
 
 /**********************  32bit math **********************/
 
@@ -776,7 +828,7 @@ save_calibrate(){              /* read current data in eeprom, save new data if 
 static char adr;
 
    adr = 0;                             /* &cal[0], address of ee data not figured correctly */
-   for( j = 0; j < 4; ++j ){
+   for( j = 0; j < 6; ++j ){
       if( rcal[j] != eecal[j] ){
          _eedata = rcal[j];
          eewrite( adr );
