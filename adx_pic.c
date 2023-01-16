@@ -93,13 +93,19 @@ char divi;
 /* solution is with 3 fractional bits, so audio tone * 8 is the offset to add in */
 /* 6th value must be zero for the algorithms to work */
 
-extern char eecal[NUM_BAND] = { 40,20,17,15,12,10,60 };  /* keep at eeprom address zero */
-extern char dividers[NUM_BAND] = { 112,60,42,40,32,30,114 };
+extern char eecal[NUM_BAND] = { 40,30,20,17,15,12,10 };  /* keep at eeprom address zero */
+extern char dividers[NUM_BAND] = { 112,80,60,42,40,32,30 };
 
 extern char s40ft8[] = { 0x36, 0x7F, 0x00, 0x0D, 0xD8, 0x00, 0x0C, 0x58 };
 extern char s40ft4[] = { 0x36, 0x7F, 0x00, 0x0D, 0xC9, 0x00, 0x01, 0xC9 };
 extern char s40js8[] = { 0x36, 0x7F, 0x00, 0x0D, 0xDA, 0x00, 0x1C, 0x5A };
 extern char s40wsp[] = { 0x36, 0x7F, 0x00, 0x0D, 0xC3, 0x00, 0x32, 0xC3 };
+
+extern char s30ft8[] = { 0x4C, 0x4C, 0x00, 0x0E, 0x37, 0x00, 0x1F, 0xAC };
+extern char s30ft4[] = { 0x4C, 0x4C, 0x00, 0x0E, 0x39, 0x00, 0x04, 0x14 };
+extern char s30js8[] = { 0x4C, 0x4C, 0x00, 0x0E, 0x34, 0x00, 0x49, 0x10 };
+extern char s30wsp[] = { 0x4C, 0x4C, 0x00, 0x0E, 0x38, 0x00, 0x27, 0x60 };
+
 
 extern char s20ft8[] = { 0x65, 0xBB, 0x00, 0x0E, 0xE3, 0x00, 0x17, 0x2F };
 extern char s20ft4[] = { 0x65, 0xBB, 0x00, 0x0E, 0xE5, 0x00, 0x07, 0x39 };
@@ -126,11 +132,12 @@ extern char s10ft4[] = { 0xCB, 0x76, 0x00, 0x0E, 0xE8, 0x00, 0x1D, 0x90 };
 extern char s10js8[] = { 0xCB, 0x76, 0x00, 0x0E, 0xD8, 0x00, 0x61, 0x70 };
 extern char s10wsp[] = { 0xCB, 0x76, 0x00, 0x0E, 0xDF, 0x00, 0x81, 0xB6 };
 
-/* experimental freq/bands,17m on 15m lowpass, 12m on 10 meter low pass, and wefax boston rx only */
+/* experimental wefax boston rx only, out of EEPROM space
 extern char fax0[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
 extern char fax1[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
 extern char fax2[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
 extern char fax3[]   = { 0x35, 0x8B, 0x00, 0x0C, 0x73, 0x00, 0x18, 0x0F };
+*****/
 
 
 char sec4;           /* 1/4 seconds counts */
@@ -250,7 +257,7 @@ void switch_action(){
    if( k >= TAP ){
      switch( k ){
         case TAP:
-          if( band <  NUM_BAND-1 ) tx_inhibit = 0;  /* no tx on wefax freq */
+          tx_inhibit = 0;
         break;
         case LONGPRESS:                    /* tune mode, manual transmit */
           if( (PORTB & 4) == 0 ){          /* is it still pressed */
@@ -654,12 +661,13 @@ static char last_time;
 
    switch( band ){
     case 0:   j = JS8_LED;   break;                                 /* 40m */
-    case 1:   j = FT4_LED;   break;                                 /* 20m */
-    case 2:   j = WSPR_LED + JS8_LED + FT4_LED + FT8_LED; break;    /* 17m */
-    case 3:   j = WSPR_LED + JS8_LED + FT8_LED;  break;             /* 15m */
-    case 4:   j = WSPR_LED + FT4_LED; break;                        /* 12m */
-    case 5:   j = FT8_LED;   break;                                 /* 10m */
-    case 6:   j = WSPR_LED + JS8_LED; break;                        /* wefax. 60m */
+    case 1:   j = FT4_LED + FT8_LED;   break;                       /* 30m */
+    case 2:   j = FT4_LED;   break;                                 /* 20m */
+    case 3:   j = WSPR_LED + JS8_LED + FT4_LED + FT8_LED; break;    /* 17m */
+    case 4:   j = WSPR_LED + JS8_LED + FT8_LED;  break;             /* 15m */
+    case 5:   j = WSPR_LED + FT4_LED; break;                        /* 12m */
+    case 6:   j = FT8_LED;   break;                                 /* 10m */
+
    }
 
    switch( sec4 ){
